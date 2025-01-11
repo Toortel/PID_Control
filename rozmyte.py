@@ -1,167 +1,149 @@
-from dash import Dash, html, dcc, Input, Output, callback_context
+from dash import Dash, html, dcc, Input, Output
 import numpy as np
 import plotly.graph_objs as go
 from scipy.integrate import solve_ivp
-import simpful as sf
+import skfuzzy as fuzz
+import skfuzzy.control as ctrl
 
-# System parameters
-MASS = 10  # Mass [kg]
-DAMPING = 20  # Damping coefficient [Ns/m]
-STIFFNESS = 100  # Stiffness [N/m]
+# Constants
+MASS = 10
+DAMPING = 20
+STIFFNESS = 100
 
 
-# Model of the mass-spring-damper system
 def msd_model(t, state, F, m, b, k):
-    x, v = state  # x - displacement, v - velocity
+    x, v = state
     dxdt = v
     dvdt = (F - b * v - k * x) / m
     return [dxdt, dvdt]
 
 
-# PID controller
 def pid_controller(error, integral, derivative, Kp, Ki, Kd):
     return Kp * error + Ki * integral + Kd * derivative
 
 
-# Fuzzy PID controller setup
-def fuzzy_pid_controller(error, delta_error):
-    FS = sf.FuzzySystem()
-    FS.add_linguistic_variable("Error", sf.LinguisticVariable([
-        sf.FuzzySet(points=[[0, 1], [1, 0]], term="Small"),
-        sf.FuzzySet(points=[[0.5, 0], [1, 1.0], [1.5, 0]], term="Medium"),
-        sf.FuzzySet(points=[[1, 0], [2, 1.0]], term="Large")
-    ]))
-    FS.add_linguistic_variable("DeltaError", sf.LinguisticVariable([
-        sf.FuzzySet(points=[[0, 1], [1, 0]], term="Small"),
-        sf.FuzzySet(points=[[0.5, 0], [1, 1.0], [1.5, 0]], term="Medium"),
-        sf.FuzzySet(points=[[1, 0], [2, 1.0]], term="Large")
-    ]))
-    FS.add_linguistic_variable("Output", sf.LinguisticVariable([
-        sf.FuzzySet(points=[[0, 1], [1, 0]], term="Small"),
-        sf.FuzzySet(points=[[0.5, 0], [1, 1.0], [1.5, 0]], term="Medium"),
-        sf.FuzzySet(points=[[1, 0], [2, 1.0]], term="Large")
-    ]))
-    FS.add_rules([
-        "IF (Error IS Small) AND (DeltaError IS Small) THEN (Output IS Small)",
-        "IF (Error IS Medium) THEN (Output IS Medium)",
-        "IF (Error IS Large) OR (DeltaError IS Large) THEN (Output IS Large)"
-    ])
-    FS.set_variable("Error", error)
-    FS.set_variable("DeltaError", delta_error)
-    return FS.inference()["Output"]
+def fuzzy_controller(error, derivative):
+    error_universe = np.linspace(-2, 2, 100)
+    derivative_universe = np.linspace(-2, 2, 100)
+    force_universe = np.linspace(-10, 10, 100)
+
+    error_var = ctrl.Antecedent(error_universe, 'error')
+    derivative_var = ctrl.Antecedent(derivative_universe, 'derivative')
+    force_var = ctrl.Consequent(force_universe, 'force')
+
+    error_var["NB"] = fuzz.trimf(error_universe, [-2, -2, -1])
+    error_var["NM"] = fuzz.trimf(error_universe, [-2, -1, 0])
+    error_var["Z"] = fuzz.trimf(error_universe, [-1, 0, 1])
+    error_var["PM"] = fuzz.trimf(error_universe, [0, 1, 2])
+    error_var["PB"] = fuzz.trimf(error_universe, [1, 2, 2])
+
+    derivative_var["NB"] = fuzz.trimf(derivative_universe, [-2, -2, -1])
+    derivative_var["NM"] = fuzz.trimf(derivative_universe, [-2, -1, 0])
+    derivative_var["Z"] = fuzz.trimf(derivative_universe, [-1, 0, 1])
+    derivative_var["PM"] = fuzz.trimf(derivative_universe, [0, 1, 2])
+    derivative_var["PB"] = fuzz.trimf(derivative_universe, [1, 2, 2])
+
+    force_var["NB"] = fuzz.trimf(force_universe, [-10, -10, -5])
+    force_var["NM"] = fuzz.trimf(force_universe, [-10, -5, 0])
+    force_var["Z"] = fuzz.trimf(force_universe, [-5, 0, 5])
+    force_var["PM"] = fuzz.trimf(force_universe, [0, 5, 10])
+    force_var["PB"] = fuzz.trimf(force_universe, [5, 10, 10])
+
+    rules = [
+        ctrl.Rule(error_var['NB'] & derivative_var['NB'], force_var['PB']),
+        ctrl.Rule(error_var['NB'] & derivative_var['Z'], force_var['PM']),
+        ctrl.Rule(error_var['Z'] & derivative_var['Z'], force_var['Z']),
+        ctrl.Rule(error_var['PB'] & derivative_var['Z'], force_var['NM']),
+        ctrl.Rule(error_var['PB'] & derivative_var['PB'], force_var['NB']),
+    ]
+
+    system = ctrl.ControlSystem(rules)
+    controller = ctrl.ControlSystemSimulation(system)
+
+    controller.input['error'] = error
+    controller.input['derivative'] = derivative
+    controller.compute()
+
+    return controller.output['force']
 
 
-# Simulation function
-def simulate_msd(Kp, Ki, Kd, fuzzy=False, setpoint=1.0, duration=10, dt=0.01):
+def simulate_msd(control_type, Kp=10, Ki=1, Kd=0.1, setpoint=1.0, duration=10, dt=0.01):
     times = np.arange(0, duration, dt)
-    x_vals, force_vals, error_vals = [], [], []
-    x, v = 0, 0  # Initial conditions
+    x_vals, v_vals, force_vals, error_vals = [], [], [], []
+    x, v = 0, 0
     integral = 0
     prev_error = setpoint - x
 
     for t in times:
         error = setpoint - x
-        delta_error = error - prev_error
         integral += error * dt
-        if fuzzy:
-            force = fuzzy_pid_controller(error, delta_error)
-        else:
-            derivative = delta_error / dt
-            force = pid_controller(error, integral, derivative, Kp, Ki, Kd)
+        derivative = (error - prev_error) / dt
+
+        force = pid_controller(error, integral, derivative, Kp, Ki, Kd) if control_type == 'PID' else fuzzy_controller(
+            error, derivative)
         prev_error = error
+
         sol = solve_ivp(msd_model, [t, t + dt], [x, v], args=(force, MASS, DAMPING, STIFFNESS), t_eval=[t + dt])
         x, v = sol.y[:, 0]
+
         x_vals.append(x)
+        v_vals.append(v)
         force_vals.append(force)
         error_vals.append(error)
+
     return times, x_vals, force_vals, error_vals
 
 
-# Create Dash application
 app = Dash(__name__)
-app.title = "PID and Fuzzy PID Control"
 
 app.layout = html.Div([
-    html.H1("Mass-Spring-Damper System Control", className="header"),
-    dcc.Tabs(id="tabs", value="tab-1", children=[
-        dcc.Tab(label="PID Control", value="tab-1", className="tab"),
-        dcc.Tab(label="Fuzzy PID Control", value="tab-2", className="tab"),
+    html.H1("Regulator PID i Fuzzy dla układu MSD"),
+
+    dcc.Tabs(id="tabs", value="PID", children=[
+        dcc.Tab(label="PID Controller", value="PID", children=[
+            html.Div([
+                html.Label("Kp:"), dcc.Input(id="kp-input", type="number", value=10, step=0.1),
+                html.Label("Ki:"), dcc.Input(id="ki-input", type="number", value=1, step=0.1),
+                html.Label("Kd:"), dcc.Input(id="kd-input", type="number", value=0.1, step=0.1),
+                html.Label("Setpoint:"), dcc.Input(id="setpoint-input", type="number", value=1.0, step=0.1),
+                html.Label("Czas trwania [s]"), dcc.Input(id="duration-input", type="number", value=10, step=1),
+            ])
+        ]),
+
+        dcc.Tab(label="Fuzzy Controller", value="Fuzzy", children=[
+            html.Div([
+                html.Label("Setpoint:"), dcc.Input(id="fuzzy-setpoint-input", type="number", value=1.0, step=0.1),
+                html.Label("Czas trwania [s]"), dcc.Input(id="fuzzy-duration-input", type="number", value=10, step=1),
+            ])
+        ])
     ]),
-    html.Div(id="control-panel", className="panel"),
-    dcc.Graph(id="msd-graph", className="graph"),
-], className="container")
+
+    dcc.Graph(id="msd-graph"),
+])
 
 
 @app.callback(
-    [Output("control-panel", "children"), Output("msd-graph", "figure")],
-    [Input("tabs", "value")],
+    Output("msd-graph", "figure"),
+    [Input("tabs", "value"),
+     Input("kp-input", "value"), Input("ki-input", "value"), Input("kd-input", "value"),
+     Input("setpoint-input", "value"), Input("duration-input", "value"),
+     Input("fuzzy-setpoint-input", "value"), Input("fuzzy-duration-input", "value")]
 )
-def update_panel_and_graph(tab):  # Only one argument, the tab value, is passed
-    ctx = callback_context
-    if tab == "tab-1":  # Regular PID control panel
-        return [
-            html.Div([
-                html.Label("Kp:"),
-                dcc.Input(id="kp-input", type="number", value=10, step=0.1),
-                html.Label("Ki:"),
-                dcc.Input(id="ki-input", type="number", value=1, step=0.1),
-                html.Label("Kd:"),
-                dcc.Input(id="kd-input", type="number", value=0.1, step=0.1),
-                html.Label("Setpoint:"),
-                dcc.Input(id="setpoint-input", type="number", value=1.0, step=0.1),
-                html.Label("Duration (seconds):"),
-                dcc.Input(id="duration-input", type="number", value=10, step=1),
-                html.Button("Simulate", id="simulate-pid", n_clicks=0),
-            ], className="control-panel"),
-            go.Figure(),  # Placeholder figure until simulation is run
-        ]
-    elif tab == "tab-2":  # Fuzzy PID control panel
-        return [
-            html.Div([
-                html.Label("Setpoint:"),
-                dcc.Input(id="setpoint-input-fuzzy", type="number", value=1.0, step=0.1),
-                html.Label("Duration (seconds):"),
-                dcc.Input(id="duration-input-fuzzy", type="number", value=10, step=1),
-                html.Button("Simulate", id="simulate-fuzzy", n_clicks=0),
-            ], className="control-panel"),
-            go.Figure(),  # Placeholder figure for the fuzzy PID tab
-        ]
+def update_graph(control_type, kp, ki, kd, pid_setpoint, pid_duration, fuzzy_setpoint, fuzzy_duration):
+    if control_type == "PID":
+        times, x_vals, force_vals, error_vals = simulate_msd(control_type, kp, ki, kd, pid_setpoint, pid_duration)
+    else:
+        times, x_vals, force_vals, error_vals = simulate_msd(control_type, setpoint=fuzzy_setpoint,
+                                                             duration=fuzzy_duration)
 
-    # Update the graph (this callback runs when control inputs or simulation buttons are clicked)
-    if tab == "tab-1":
-        kp = float(ctx.inputs["kp-input.value"])
-        ki = float(ctx.inputs["ki-input.value"])
-        kd = float(ctx.inputs["kd-input.value"])
-        setpoint = float(ctx.inputs["setpoint-input.value"])
-        duration = float(ctx.inputs["duration-input.value"])
-        times, x_vals, force_vals, error_vals = simulate_msd(kp, ki, kd, setpoint=setpoint, duration=duration)
-
-    elif tab == "tab-2":
-        setpoint = float(ctx.inputs["setpoint-input-fuzzy.value"])
-        duration = float(ctx.inputs["duration-input-fuzzy.value"])
-        times, x_vals, force_vals, error_vals = simulate_msd(0, 0, 0, fuzzy=True, setpoint=setpoint, duration=duration)
-
-    # Create the graph
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=times, y=x_vals, mode="lines", name="Position (x)"))
-    fig.add_trace(go.Scatter(x=times, y=force_vals, mode="lines", name="Control Force (F)"))
-    fig.add_trace(go.Scatter(x=times, y=error_vals, mode="lines", name="Error (e)"))
-    fig.update_layout(
-        title="Mass-Spring-Damper System Simulation",
-        xaxis_title="Time (s)",
-        yaxis_title="Values",
-        legend_title="Parameters",
-    )
-    return html.Div(), fig
+    fig.add_trace(go.Scatter(x=times, y=x_vals, mode="lines", name="Położenie (x)"))
+    fig.add_trace(go.Scatter(x=times, y=force_vals, mode="lines", name="Siła sterująca (F)"))
+    fig.add_trace(go.Scatter(x=times, y=error_vals, mode="lines", name="Błąd sterowania"))
 
+    fig.update_layout(title=f"Sterowanie: {control_type}", xaxis_title="Czas (s)", yaxis_title="Wartości")
+    return fig
 
-# Add styles for the app
-app.css.append_css({
-    "external_url": [
-        "https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
-    ]
-})
-app.layout.className = "container-fluid"
 
 if __name__ == "__main__":
     app.run_server(debug=True)
