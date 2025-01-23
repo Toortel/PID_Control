@@ -14,11 +14,9 @@ STIFFNESS = 100
 def msd_model(t, state, F, m, b, k, distortion_amplitude=5, distortion_frequency=1):
     x, v = state
     dxdt = v
-    # Add a sinusoidal distortion
     sinusoidal_distortion = distortion_amplitude * np.sin(2 * np.pi * distortion_frequency * t)
     dvdt = (F + sinusoidal_distortion - b * v - k * x) / m
     return [dxdt, dvdt]
-
 
 
 def pid_controller(error, integral, derivative, Kp, Ki, Kd):
@@ -100,56 +98,87 @@ def simulate_msd(control_type, Kp=10, Ki=1, Kd=0.1, setpoint=1.0, duration=10, d
     return times, x_vals, force_vals, error_vals
 
 
-
 app = Dash(__name__)
 
+# Define global styles
 app.layout = html.Div([
-    html.H1("Regulator PID i Fuzzy dla układu MSD"),
+    html.H1("Regulator PID i Fuzzy dla układu MSD", style={"textAlign": "center", "fontFamily": "Arial, sans-serif"}),
 
     dcc.Tabs(id="tabs", value="PID", children=[
         dcc.Tab(label="PID Controller", value="PID", children=[
             html.Div([
-                html.Label("Kp:"), dcc.Input(id="kp-input", type="number", value=10, step=0.1),
-                html.Label("Ki:"), dcc.Input(id="ki-input", type="number", value=1, step=0.1),
-                html.Label("Kd:"), dcc.Input(id="kd-input", type="number", value=0.1, step=0.1),
-                html.Label("Setpoint:"), dcc.Input(id="setpoint-input", type="number", value=1.0, step=0.1),
-                html.Label("Czas trwania [s]"), dcc.Input(id="duration-input", type="number", value=10, step=1),
-            ])
+                html.Label("Kp:", style={"marginRight": "10px"}),
+                dcc.Input(id="kp-input", type="number", value=10, step=0.1, style={"marginBottom": "10px"}),
+                html.Label("Ki:", style={"marginRight": "10px"}),
+                dcc.Input(id="ki-input", type="number", value=1, step=0.1, style={"marginBottom": "10px"}),
+                html.Label("Kd:", style={"marginRight": "10px"}),
+                dcc.Input(id="kd-input", type="number", value=0.1, step=0.1, style={"marginBottom": "10px"}),
+                html.Label("Setpoint:", style={"marginRight": "10px"}),
+                dcc.Input(id="setpoint-input", type="number", value=1.0, step=0.1, style={"marginBottom": "10px"}),
+                html.Label("Czas trwania [s]:", style={"marginRight": "10px"}),
+                dcc.Input(id="duration-input", type="number", value=10, step=1, style={"marginBottom": "10px"}),
+            ], style={"padding": "20px", "border": "1px solid #ccc", "borderRadius": "5px", "fontFamily": "Arial, sans-serif"})
         ]),
 
         dcc.Tab(label="Fuzzy Controller", value="Fuzzy", children=[
             html.Div([
-                html.Label("Setpoint:"), dcc.Input(id="fuzzy-setpoint-input", type="number", value=1.0, step=0.1),
-                html.Label("Czas trwania [s]"), dcc.Input(id="fuzzy-duration-input", type="number", value=10, step=1),
-            ])
+                html.Label("Setpoint:", style={"marginRight": "10px"}),
+                dcc.Input(id="fuzzy-setpoint-input", type="number", value=1.0, step=0.1, style={"marginBottom": "10px"}),
+                html.Label("Czas trwania [s]:", style={"marginRight": "10px"}),
+                dcc.Input(id="fuzzy-duration-input", type="number", value=10, step=1, style={"marginBottom": "10px"}),
+            ], style={"padding": "20px", "border": "1px solid #ccc", "borderRadius": "5px", "fontFamily": "Arial, sans-serif"})
         ])
     ]),
 
-    dcc.Graph(id="msd-graph"),
-])
+    html.Div([
+        dcc.Loading(
+            id="loading-position",
+            type="default",
+            children=dcc.Graph(id="position-graph")
+        ),
+        dcc.Loading(
+            id="loading-force",
+            type="default",
+            children=dcc.Graph(id="force-graph")
+        ),
+        dcc.Loading(
+            id="loading-error",
+            type="default",
+            children=dcc.Graph(id="error-graph")
+        ),
+    ])
+], style={"fontFamily": "Arial, sans-serif", "margin": "20px"})
 
 
 @app.callback(
-    Output("msd-graph", "figure"),
+    [Output("position-graph", "figure"),
+     Output("force-graph", "figure"),
+     Output("error-graph", "figure")],
     [Input("tabs", "value"),
      Input("kp-input", "value"), Input("ki-input", "value"), Input("kd-input", "value"),
      Input("setpoint-input", "value"), Input("duration-input", "value"),
      Input("fuzzy-setpoint-input", "value"), Input("fuzzy-duration-input", "value")]
 )
-def update_graph(control_type, kp, ki, kd, pid_setpoint, pid_duration, fuzzy_setpoint, fuzzy_duration):
+def update_graphs(control_type, kp, ki, kd, pid_setpoint, pid_duration, fuzzy_setpoint, fuzzy_duration):
     if control_type == "PID":
         times, x_vals, force_vals, error_vals = simulate_msd(control_type, kp, ki, kd, pid_setpoint, pid_duration)
     else:
         times, x_vals, force_vals, error_vals = simulate_msd(control_type, setpoint=fuzzy_setpoint,
                                                              duration=fuzzy_duration)
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=times, y=x_vals, mode="lines", name="Położenie (x)"))
-    fig.add_trace(go.Scatter(x=times, y=force_vals, mode="lines", name="Siła sterująca (F)"))
-    fig.add_trace(go.Scatter(x=times, y=error_vals, mode="lines", name="Błąd sterowania"))
+    position_fig = go.Figure()
+    position_fig.add_trace(go.Scatter(x=times, y=x_vals, mode="lines", name="Położenie (x)"))
+    position_fig.update_layout(title="Położenie (x)", xaxis_title="Czas (s)", yaxis_title="Położenie")
 
-    fig.update_layout(title=f"Sterowanie: {control_type}", xaxis_title="Czas (s)", yaxis_title="Wartości")
-    return fig
+    force_fig = go.Figure()
+    force_fig.add_trace(go.Scatter(x=times, y=force_vals, mode="lines", name="Siła sterująca (F)"))
+    force_fig.update_layout(title="Siła sterująca (F)", xaxis_title="Czas (s)", yaxis_title="Siła")
+
+    error_fig = go.Figure()
+    error_fig.add_trace(go.Scatter(x=times, y=error_vals, mode="lines", name="Błąd sterowania"))
+    error_fig.update_layout(title="Błąd sterowania", xaxis_title="Czas (s)", yaxis_title="Błąd")
+
+    return position_fig, force_fig, error_fig
 
 
 if __name__ == "__main__":
