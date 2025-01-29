@@ -31,11 +31,11 @@ def fuzzy_controller(error, derivative):
 
     scale_factor_error = 1
 
-    error_var["NB"] = fuzz.trimf(error_universe, [-2, -1.5, -0.5 ])*scale_factor_error
-    error_var["NM"] = fuzz.trimf(error_universe, [-1.5, -0.5, 0])*scale_factor_error
-    error_var["Z"] = fuzz.trimf(error_universe, [-0.5, 0, 0.5])*scale_factor_error
-    error_var["PM"] = fuzz.trimf(error_universe, [0, 0.5, 1.5])*scale_factor_error
-    error_var["PB"] = fuzz.trimf(error_universe, [0.5, 1.5, 2])*scale_factor_error
+    error_var["NB"] = fuzz.trimf(error_universe, [-1, -0.3, -0.2 ])*scale_factor_error
+    error_var["NM"] = fuzz.trimf(error_universe, [-0.5, -0.2, 0])*scale_factor_error
+    error_var["Z"] = fuzz.trimf(error_universe, [-0.2, 0, 0.2])*scale_factor_error
+    error_var["PM"] = fuzz.trimf(error_universe, [0, 0.2, 0.5])*scale_factor_error
+    error_var["PB"] = fuzz.trimf(error_universe, [0.2, 0.3, 1])*scale_factor_error
     
     scale_factor_derivative = 1
 
@@ -46,7 +46,7 @@ def fuzzy_controller(error, derivative):
     derivative_var["PB"] = fuzz.trimf(derivative_universe, [0.5, 1.5, 2])*scale_factor_derivative
     
     scale_factor_force = 1
-    additional = 4
+    additional = 1
 
     force_var["NB"] = fuzz.trimf(force_universe, [9, 9+additional, 12+additional])*scale_factor_force
     force_var["NM"] = fuzz.trimf(force_universe, [9+additional, 12+additional, 15+additional])*scale_factor_force
@@ -55,8 +55,8 @@ def fuzzy_controller(error, derivative):
     force_var["PB"] = fuzz.trimf(force_universe, [12+additional, 14+additional, 16+additional])*scale_factor_force
 
     rules = [
-        ctrl.Rule(error_var['NB'] & derivative_var['NB'], force_var['PB']),
-        ctrl.Rule(error_var['NB'] & derivative_var['Z'], force_var['PM']),
+        ctrl.Rule(error_var['NB'] | derivative_var['NM'], force_var['PB']),
+        ctrl.Rule(error_var['NB'] | derivative_var['Z'], force_var['PM']),
         ctrl.Rule(error_var['Z'] & derivative_var['Z'], force_var['Z']),
         ctrl.Rule(error_var['PB'] & derivative_var['Z'], force_var['NM']),
         ctrl.Rule(error_var['PB'] & derivative_var['PB'], force_var['NB']),
@@ -68,8 +68,10 @@ def fuzzy_controller(error, derivative):
     controller.input['error'] = error
     controller.input['derivative'] = derivative
     controller.compute()
+    
+    force = controller.output['force']*3.7
 
-    return controller.output['force']
+    return force
 
 def simulate_msd(control_type, Kp=5, Ki=0.3, Kd=0.1, Tp = 0.01, setpoint=1.0, duration=30, dt=0.01,
                  distortion_amplitude=5, distortion_frequency=1):
@@ -83,9 +85,12 @@ def simulate_msd(control_type, Kp=5, Ki=0.3, Kd=0.1, Tp = 0.01, setpoint=1.0, du
         error = setpoint - x
         integral += error  # zamiana 
         derivative = (error - prev_error) 
+        
+        integral_fuzzy = error * dt
+        derivative_fuzzy = (error - prev_error) / dt
 
         force = pid_controller(error, integral, derivative, Kp, Ki, Kd, Tp) if control_type == 'PID' else fuzzy_controller(
-            error, derivative)
+            error, derivative_fuzzy)
         prev_error = error
 
         sol = solve_ivp(msd_model, [t, t + dt], [x, v],
@@ -161,7 +166,7 @@ def update_graphs(control_type, kp, ki, kd, tp, pid_setpoint, pid_duration, fuzz
     if control_type == "PID":
         times, x_vals, force_vals, error_vals, pid_set = simulate_msd(control_type, kp, ki, kd, tp, pid_setpoint, pid_duration)
     else:
-        times, x_vals, force_vals, error_vals = simulate_msd(control_type, setpoint=fuzzy_setpoint,
+        times, x_vals, force_vals, error_vals, pid_set = simulate_msd(control_type, setpoint=fuzzy_setpoint,
                                                              duration=fuzzy_duration)
 
     position_error_fig = go.Figure()
