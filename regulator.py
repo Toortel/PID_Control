@@ -18,7 +18,7 @@ def msd_model(t, state, F, m, b, k, distortion_amplitude=5, distortion_frequency
     return [dxdt, dvdt]
 
 def pid_controller(error, integral, derivative, Kp, Ki, Kd):
-    return Kp * error + Ki * integral + Kd * derivative
+    return Kp * error + Ki * integral + Kd * derivative # zwraca Kp * (e + /Ti + Td*) wystawiamy Ti>>1 i Td i wyłączyć zakłócenia + dodać zmianę Tp zamiast obecnych
 
 def fuzzy_controller(error, derivative):
     error_universe = np.linspace(-2, 2, 100)
@@ -81,7 +81,7 @@ def simulate_msd(control_type, Kp=10, Ki=1, Kd=0.1, setpoint=1.0, duration=10, d
 
     for t in times:
         error = setpoint - x
-        integral += error * dt
+        integral += error * dt # zamiana 
         derivative = (error - prev_error) / dt
 
         force = pid_controller(error, integral, derivative, Kp, Ki, Kd) if control_type == 'PID' else fuzzy_controller(
@@ -164,11 +164,11 @@ def update_graphs(control_type, kp, ki, kd, pid_setpoint, pid_duration, fuzzy_se
     position_error_fig = go.Figure()
     position_error_fig.add_trace(go.Scatter(x=times, y=x_vals, mode="lines", name="Położenie (x)"))
     position_error_fig.add_trace(go.Scatter(x=times, y=error_vals, mode="lines", name="Błąd sterowania"))
-    position_error_fig.update_layout(title="Położenie (x) i Błąd sterowania", xaxis_title="Czas (s)", yaxis_title="Wartość")
+    position_error_fig.update_layout(title="Położenie (x) i Błąd sterowania", xaxis_title="Czas (s)", yaxis_title="Wartość [m]")
 
     force_fig = go.Figure()
     force_fig.add_trace(go.Scatter(x=times, y=force_vals, mode="lines", name="Siła sterująca (F)"))
-    force_fig.update_layout(title="Siła sterująca (F)", xaxis_title="Czas (s)", yaxis_title="Siła")
+    force_fig.update_layout(title="Siła sterująca (F)", xaxis_title="Czas (s)", yaxis_title="Siła [N]")
 
     return position_error_fig, force_fig
 
