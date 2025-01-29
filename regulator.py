@@ -13,17 +13,19 @@ STIFFNESS = 50
 def msd_model(t, state, F, m, b, k, distortion_amplitude=5, distortion_frequency=1):
     x, v = state
     dxdt = v
-    sinusoidal_distortion = distortion_amplitude * np.sin(2 * np.pi * distortion_frequency * t)
+    # sinusoidal_distortion = distortion_amplitude * np.sin(2 * np.pi * distortion_frequency * t)
+    sinusoidal_distortion = 0
     dvdt = (F + sinusoidal_distortion - b * v - k * x) / m
+
     return [dxdt, dvdt]
 
-def pid_controller(error, integral, derivative, Kp, Ki, Kd):
-    return Kp * error + Ki * integral + Kd * derivative # zwraca Kp * (e + /Ti + Td*) wystawiamy Ti>>1 i Td i wyłączyć zakłócenia + dodać zmianę Tp zamiast obecnych
+def pid_controller(error, integral, derivative, Kp, Ti, Td):
+    return Kp * error + Ti * integral + Td * derivative # zwraca Kp * (e + /Ti + Td*) wystawiamy Ti>>1 i Td i wyłączyć zakłócenia + dodać zmianę Tp zamiast obecnych
 
 def fuzzy_controller(error, derivative):
-    error_universe = np.linspace(-2, 2, 100)
-    derivative_universe = np.linspace(-2, 2, 100)
-    force_universe = np.linspace(-100, 100, 1000)
+    error_universe = np.linspace(-10, 10, 100)
+    derivative_universe = np.linspace(-5, 5, 100)
+    force_universe = np.linspace(-20, 20, 100)
 
     error_var = ctrl.Antecedent(error_universe, 'error')
     derivative_var = ctrl.Antecedent(derivative_universe, 'derivative')
@@ -71,7 +73,7 @@ def fuzzy_controller(error, derivative):
 
     return controller.output['force']
 
-def simulate_msd(control_type, Kp=10, Ki=1, Kd=0.1, setpoint=1.0, duration=10, dt=0.01,
+def simulate_msd(control_type, Kp=10, Ti=1, Td=0.1, setpoint=1.0, duration=10, dt=0.01,
                  distortion_amplitude=5, distortion_frequency=1):
     times = np.arange(0, duration, dt)
     x_vals, v_vals, force_vals, error_vals = [], [], [], []
@@ -81,10 +83,10 @@ def simulate_msd(control_type, Kp=10, Ki=1, Kd=0.1, setpoint=1.0, duration=10, d
 
     for t in times:
         error = setpoint - x
-        integral += error * dt # zamiana 
+        integral += error * dt # zamiana
         derivative = (error - prev_error) / dt
 
-        force = pid_controller(error, integral, derivative, Kp, Ki, Kd) if control_type == 'PID' else fuzzy_controller(
+        force = pid_controller(error, integral, derivative, Kp, Ti, Td) if control_type == 'PID' else fuzzy_controller(
             error, derivative)
         prev_error = error
 
@@ -111,9 +113,9 @@ app.layout = html.Div([
             html.Div([
                 html.Label("Kp:", style={"marginRight": "10px"}),
                 dcc.Input(id="kp-input", type="number", value=10, step=0.1, style={"marginBottom": "10px"}),
-                html.Label("Ki:", style={"marginRight": "10px"}),
+                html.Label("Ti:", style={"marginRight": "10px"}),
                 dcc.Input(id="ki-input", type="number", value=1, step=0.1, style={"marginBottom": "10px"}),
-                html.Label("Kd:", style={"marginRight": "10px"}),
+                html.Label("Td:", style={"marginRight": "10px"}),
                 dcc.Input(id="kd-input", type="number", value=0.1, step=0.1, style={"marginBottom": "10px"}),
                 html.Label("Setpoint:", style={"marginRight": "10px"}),
                 dcc.Input(id="setpoint-input", type="number", value=1.0, step=0.1, style={"marginBottom": "10px"}),
