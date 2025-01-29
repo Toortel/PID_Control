@@ -13,19 +13,17 @@ STIFFNESS = 50
 def msd_model(t, state, F, m, b, k, distortion_amplitude=5, distortion_frequency=1):
     x, v = state
     dxdt = v
-    # sinusoidal_distortion = distortion_amplitude * np.sin(2 * np.pi * distortion_frequency * t)
-    sinusoidal_distortion = 0
+    sinusoidal_distortion = distortion_amplitude * np.sin(2 * np.pi * distortion_frequency * t)
     dvdt = (F + sinusoidal_distortion - b * v - k * x) / m
-
     return [dxdt, dvdt]
 
-def pid_controller(error, integral, derivative, Kp, Ti, Td):
-    return Kp * error + Ti * integral + Td * derivative # zwraca Kp * (e + /Ti + Td*) wystawiamy Ti>>1 i Td i wyłączyć zakłócenia + dodać zmianę Tp zamiast obecnych
+def pid_controller(error, integral, derivative, Kp, Ki, Kd, Tp):
+    return Kp *( error + (Tp/Ki) * integral + (Kd/Tp) * derivative) # zwraca Kp * (e + /Ti + Td*) wystawiamy Ti>>1 i Td i wyłączyć zakłócenia + dodać zmianę Tp zamiast obecnych
 
 def fuzzy_controller(error, derivative):
-    error_universe = np.linspace(-10, 10, 100)
-    derivative_universe = np.linspace(-5, 5, 100)
-    force_universe = np.linspace(-20, 20, 100)
+    error_universe = np.linspace(-2, 2, 100)
+    derivative_universe = np.linspace(-2, 2, 100)
+    force_universe = np.linspace(-100, 100, 1000)
 
     error_var = ctrl.Antecedent(error_universe, 'error')
     derivative_var = ctrl.Antecedent(derivative_universe, 'derivative')
@@ -73,20 +71,20 @@ def fuzzy_controller(error, derivative):
 
     return controller.output['force']
 
-def simulate_msd(control_type, Kp=10, Ti=1, Td=0.1, setpoint=1.0, duration=10, dt=0.01,
+def simulate_msd(control_type, Kp=5, Ki=0.3, Kd=0.1, Tp = 0.01, setpoint=1.0, duration=30, dt=0.01,
                  distortion_amplitude=5, distortion_frequency=1):
     times = np.arange(0, duration, dt)
-    x_vals, v_vals, force_vals, error_vals = [], [], [], []
+    x_vals, v_vals, force_vals, error_vals, pid_set = [], [], [], [], []
     x, v = 0, 0
     integral = 0
     prev_error = setpoint - x
 
     for t in times:
         error = setpoint - x
-        integral += error * dt # zamiana
-        derivative = (error - prev_error) / dt
+        integral += error  # zamiana 
+        derivative = (error - prev_error) 
 
-        force = pid_controller(error, integral, derivative, Kp, Ti, Td) if control_type == 'PID' else fuzzy_controller(
+        force = pid_controller(error, integral, derivative, Kp, Ki, Kd, Tp) if control_type == 'PID' else fuzzy_controller(
             error, derivative)
         prev_error = error
 
@@ -99,8 +97,9 @@ def simulate_msd(control_type, Kp=10, Ti=1, Td=0.1, setpoint=1.0, duration=10, d
         v_vals.append(v)
         force_vals.append(force)
         error_vals.append(error)
+        pid_set.append(setpoint)
 
-    return times, x_vals, force_vals, error_vals
+    return times, x_vals, force_vals, error_vals, pid_set
 
 app = Dash(__name__)
 
@@ -112,15 +111,17 @@ app.layout = html.Div([
         dcc.Tab(label="PID Controller", value="PID", children=[
             html.Div([
                 html.Label("Kp:", style={"marginRight": "10px"}),
-                dcc.Input(id="kp-input", type="number", value=10, step=0.1, style={"marginBottom": "10px"}),
+                dcc.Input(id="kp-input", type="number", value=5, step=0.1, style={"marginBottom": "10px"}),
                 html.Label("Ti:", style={"marginRight": "10px"}),
-                dcc.Input(id="ki-input", type="number", value=1, step=0.1, style={"marginBottom": "10px"}),
+                dcc.Input(id="ki-input", type="number", value=0.3, step=0.1, style={"marginBottom": "10px"}),
                 html.Label("Td:", style={"marginRight": "10px"}),
                 dcc.Input(id="kd-input", type="number", value=0.1, step=0.1, style={"marginBottom": "10px"}),
+                html.Label("Tp:"),
+                dcc.Input(id="tp-input", type="number", value=0.01, step=0.01),
                 html.Label("Setpoint:", style={"marginRight": "10px"}),
                 dcc.Input(id="setpoint-input", type="number", value=1.0, step=0.1, style={"marginBottom": "10px"}),
                 html.Label("Czas trwania [s]:", style={"marginRight": "10px"}),
-                dcc.Input(id="duration-input", type="number", value=10, step=1, style={"marginBottom": "10px"}),
+                dcc.Input(id="duration-input", type="number", value=30, step=1, style={"marginBottom": "10px"}),
             ], style={"padding": "20px", "border": "1px solid #ccc", "borderRadius": "5px", "fontFamily": "Arial, sans-serif"})
         ]),
 
@@ -152,20 +153,21 @@ app.layout = html.Div([
     [Output("position-error-graph", "figure"),
      Output("force-graph", "figure")],
     [Input("tabs", "value"),
-     Input("kp-input", "value"), Input("ki-input", "value"), Input("kd-input", "value"),
+     Input("kp-input", "value"), Input("ki-input", "value"), Input("kd-input", "value"), Input("tp-input", "value"),
      Input("setpoint-input", "value"), Input("duration-input", "value"),
      Input("fuzzy-setpoint-input", "value"), Input("fuzzy-duration-input", "value")]
 )
-def update_graphs(control_type, kp, ki, kd, pid_setpoint, pid_duration, fuzzy_setpoint, fuzzy_duration):
+def update_graphs(control_type, kp, ki, kd, tp, pid_setpoint, pid_duration, fuzzy_setpoint, fuzzy_duration):
     if control_type == "PID":
-        times, x_vals, force_vals, error_vals = simulate_msd(control_type, kp, ki, kd, pid_setpoint, pid_duration)
+        times, x_vals, force_vals, error_vals, pid_set = simulate_msd(control_type, kp, ki, kd, tp, pid_setpoint, pid_duration)
     else:
         times, x_vals, force_vals, error_vals = simulate_msd(control_type, setpoint=fuzzy_setpoint,
                                                              duration=fuzzy_duration)
 
     position_error_fig = go.Figure()
     position_error_fig.add_trace(go.Scatter(x=times, y=x_vals, mode="lines", name="Położenie (x)"))
-    position_error_fig.add_trace(go.Scatter(x=times, y=error_vals, mode="lines", name="Błąd sterowania"))
+    # position_error_fig.add_trace(go.Scatter(x=times, y=error_vals, mode="lines", name="Błąd sterowania"))
+    position_error_fig.add_trace(go.Scatter(x=times, y=pid_set, mode="lines", name="Wartość zadana"))
     position_error_fig.update_layout(title="Położenie (x) i Błąd sterowania", xaxis_title="Czas (s)", yaxis_title="Wartość [m]")
 
     force_fig = go.Figure()
